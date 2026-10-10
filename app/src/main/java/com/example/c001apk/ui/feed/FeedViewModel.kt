@@ -341,8 +341,10 @@ class FeedViewModel @AssistedInject constructor(
      *
      * 存档存的是接口原始数据（评论是请求回来就直接落盘的，没过在线那套装饰），
      * 所以这些都得在这里补一遍，否则离线看评论区会缺标记、置顶项还会重一份。
+     *
+     * 挂起是因为黑名单要查本机库（[com.example.c001apk.logic.repository.BlackListRepo.checkUid]）。
      */
-    private fun decorateReply(reply: TotalReplyResponse.Data): TotalReplyResponse.Data? {
+    private suspend fun decorateReply(reply: TotalReplyResponse.Data): TotalReplyResponse.Data? {
         if (reply.entityType != "feed_reply") return null
         if (reply.id == topReplyId || reply.id == replyMeId) return null
         if (blackListRepo.checkUid(reply.uid)) return null
