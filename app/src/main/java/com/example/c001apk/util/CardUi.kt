@@ -3,32 +3,20 @@ package com.example.c001apk.util
 import org.json.JSONObject
 
 /**
- * 卡片渲染规则表：把「哪个模板怎么画」从代码里搬进可热更新的配置。
+ * 卡片渲染规则表：说明「哪个模板用哪个骨架、取哪些字段」。
  *
  * 服务端下发的顶层卡片模板实测已有 40 多种且随时会冒新的，给每个模板写死 ViewHolder 追不上。
- * 这里改成「App 提供有限骨架，规则表说明每个模板用哪个骨架、取哪些字段」，规则表由
- * [CardUiRemote] 从自建服务拉下来缓存，**新卡片只用已有骨架就不用更新 App**。
+ * 这里改成「App 提供有限骨架，规则表说明每个模板用哪个骨架、取哪些字段」，规则按实测结果
+ * 全部写死在 [BUILTIN] 里。
  *
- * 远端 JSON 是**增量覆盖**：只写要改/要加的模板，其余继续用 [BUILTIN] 内置默认表。
- * ```json
- * {"version":3,"cards":{"模板名":{
- *   "layout":"auto|list|hscroll|grid|stats|text|hidden",
- *   "span":4,
- *   "titleField":"title",
- *   "summaryField":"description|subTitle|message",
- *   "heroField":"pic",
- *   "item":{"shape":"auto|row|tile|cover|text","icon":"logo|pic","title":"title",
- *           "subtitle":"entityTypeName|description|message","action":"url|apk|none"},
- *   "stats":{"names":{"avgData":"平均分"},"avgSuffix":"_avg","countSuffix":"_count"}}}}
- * ```
  * 字段里带 `|` 是回退链：取第一个非空值（同一位置在不同模板下换字段名是常态）。
  *
  * 链里的字段名**不受「model 里声明过什么」限制**：卡片和实体都留了一份原始 JSON
  * （`HomeFeedResponse.Data.raw` / `Entities.raw`），服务端把商品图叫 `goods_pic`、
- * 把热搜热度叫 `sub_title`，规则表照配就能取到。以前取值是硬编码的九个字段名，
- * 配什么都取不到，只能往 `Entities` 里加字段发版 —— 现在改配置即可。
+ * 把热搜热度叫 `sub_title`，规则照配就能取到。以前取值是硬编码的九个字段名，
+ * 配什么都取不到，只能往 `Entities` 里加字段发版。
  *
- * 拉不到 / 解析失败一律静默退回内置表，绝不让配置问题把列表搞空白。
+ * 表里没配过的模板不必逐个补：按实体数量推断兜底，没见过的新模板也能排得像样。
  */
 object CardUi {
 
@@ -249,31 +237,26 @@ object CardUi {
         LIST_TEMPLATES.forEach { m[it] = Rule(layout = LIST) }
         GRID_TEMPLATES.forEach { (t, span) -> m[t] = Rule(layout = GRID, span = span) }
 
+        // 下面两条是实测过的例外，必须排在上面几个批量模板之后才不会被盖掉
+        // 图片放大卡：实测是整宽大图 + 标题，按实体数推断会排成宫格
+        m["imageScaleCard"] = Rule(layout = LIST)
+        // 数码首页那排商品横滚：实体里是 goods_pic / goods_promo_price，配成 tile 形状才排得出价格行
+        m["iconLargeScrollCard"] = Rule(
+            layout = HSCROLL,
+            item = ItemRule(
+                shape = SHAPE_TILE,
+                icon = "goods_pic|logo|pic",
+                title = "goods_title|title",
+                subtitle = "goods_promo_price|goods_promo_title|sub_title"
+            )
+        )
+
         // 实测是 1080x240 的全宽横幅（不是横滚小图），竖排整宽才对
         m["imageScaleCard"] = Rule(layout = LIST)
         m
     }
 
-    @Volatile
-    private var remote: Map<String, Rule> = emptyMap()
-
-    /**
-     * 装载远端规则表。空串 / 解析不出来时什么都不做（继续用上次的远端表或内置表），
-     * 这样配置写坏了最多是「这次不生效」，不会把卡片变空白。
-     */
-    fun load(json: String?) {
-        val text = json?.takeIf { it.isNotBlank() } ?: return
-        val parsed = runCatching { parse(text) }.getOrNull() ?: return
-        if (parsed.isNotEmpty()) remote = parsed
-    }
-
-    fun reset() {
-        remote = emptyMap()
-    }
-
-    fun remoteSize(): Int = remote.size
-
-    fun rule(template: String?): Rule? = template?.let { remote[it] ?: BUILTIN[it] }
+    fun rule(template: String?): Rule? = template?.let { BUILTIN[it] }
 
     /**
      * 实体级（**不是卡片级**）的官方重画表：实体自己的 `entityTemplate` 决定单个实体怎么画，
@@ -335,50 +318,6 @@ object CardUi {
     /** 把 `"a|b"` 拆成回退链；空串时用默认链 */
     fun chain(raw: String?, fallback: String): List<String> =
         (raw?.takeIf { it.isNotBlank() } ?: fallback).split("|").map { it.trim() }.filter { it.isNotEmpty() }
-
-    // ---------------------------------------------------------------- 远端 JSON
-
-    private fun parse(json: String): Map<String, Rule> {
-        val cards = JSONObject(json).optJSONObject("cards") ?: return emptyMap()
-        val out = mutableMapOf<String, Rule>()
-        cards.keys().forEach { name ->
-            cards.optJSONObject(name)?.let { out[name] = it.toRule() }
-        }
-        return out
-    }
-
-    private fun JSONObject.toRule(): Rule {
-        val itemObj = optJSONObject("item")
-        val statsObj = optJSONObject("stats")
-        return Rule(
-            layout = optString("layout", AUTO).lowercase().ifBlank { AUTO },
-            span = optInt("span", 0),
-            titleField = optString("titleField", DEFAULT_CARD_TITLE).ifBlank { DEFAULT_CARD_TITLE },
-            summaryField = optString("summaryField", DEFAULT_CARD_SUMMARY)
-                .ifBlank { DEFAULT_CARD_SUMMARY },
-            heroField = optString("heroField", DEFAULT_CARD_HERO).ifBlank { DEFAULT_CARD_HERO },
-            item = itemObj?.let { o ->
-                ItemRule(
-                    shape = o.optString("shape", SHAPE_AUTO).lowercase().ifBlank { SHAPE_AUTO },
-                    icon = o.optString("icon", DEFAULT_ICON).ifBlank { DEFAULT_ICON },
-                    title = o.optString("title", DEFAULT_ITEM_TITLE).ifBlank { DEFAULT_ITEM_TITLE },
-                    subtitle = o.optString("subtitle", DEFAULT_ITEM_SUBTITLE)
-                        .ifBlank { DEFAULT_ITEM_SUBTITLE },
-                    action = o.optString("action", "url").ifBlank { "url" }
-                )
-            },
-            stats = statsObj?.let { o ->
-                val namesObj = o.optJSONObject("names")
-                val names = mutableMapOf<String, String>()
-                namesObj?.keys()?.forEach { k -> names[k] = namesObj.optString(k) }
-                StatsRule(
-                    names = names,
-                    avgSuffix = o.optString("avgSuffix", "_avg").ifBlank { "_avg" },
-                    countSuffix = o.optString("countSuffix", "_count").ifBlank { "_count" }
-                )
-            }
-        )
-    }
 
     // ---------------------------------------------------------------- 统计卡
 

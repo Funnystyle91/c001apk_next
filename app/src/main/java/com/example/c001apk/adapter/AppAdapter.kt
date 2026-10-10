@@ -47,7 +47,6 @@ import com.example.c001apk.logic.model.Like
 import com.example.c001apk.util.DateUtils
 import com.example.c001apk.util.ImageUtil
 import com.example.c001apk.util.PrefManager
-import com.example.c001apk.util.UiSkin
 import com.example.c001apk.util.dp
 import com.example.c001apk.view.LinearItemDecoration1
 import com.google.android.material.color.MaterialColors
@@ -137,9 +136,6 @@ class AppAdapter(
             uid = data.uid ?: ""
             isStickTop = data.isStickTop == 1
 
-            // 字号必须在 setVariable 之前定好：点赞 / 回复的图标边长是拿 textSize 铺出来的
-            applySkin()
-
             binding.setVariable(BR.data, data)
             binding.setVariable(BR.listener, listener)
             binding.setVariable(
@@ -200,39 +196,9 @@ class AppAdapter(
             }
         }
 
-        /**
-         * 应用界面规格表（uiskin）：只覆盖配过的项，没配的继续用布局里的原值。
-         *
-         * 图标不用单独配 —— `setLike` / `setCustomText` 里图标边长都是拿 `textView.textSize`
-         * 铺的，字号一改图标跟着变；也正因如此本方法必须早于 `setVariable` 调用。
-         */
-        private fun applySkin() {
-            UiSkin.f("feed.unameTextSize")?.let { binding.uname.setTextSize(it) }
-            UiSkin.f("feed.titleTextSize")?.let { binding.messageTitle.setTextSize(it) }
-            UiSkin.f("feed.messageTextSize")?.let { binding.message.setTextSize(it) }
-            UiSkin.f("feed.messageLineSpacing")?.let {
-                // lineSpacingMultiplier 只有 getter，改行距要走 setLineSpacing(额外行距, 倍数)；
-                // 额外行距沿用布局里的现值，只覆盖倍数
-                binding.message.setLineSpacing(binding.message.lineSpacingExtra, it)
-                binding.forwardedMess.setLineSpacing(binding.forwardedMess.lineSpacingExtra, it)
-            }
-            UiSkin.f("feed.messageMaxLines")?.toInt()?.takeIf { it > 0 }?.let {
-                binding.message.maxLines = it
-            }
-            UiSkin.f("feed.metaTextSize")?.let {
-                binding.from.setTextSize(it)
-                binding.device.setTextSize(it)
-            }
-            UiSkin.f("feed.actionTextSize")?.let {
-                binding.like.setTextSize(it)
-                binding.reply.setTextSize(it)
-            }
-        }
-
-        /** 正文折叠行数：规格表配了就跟它走，否则用布局里的 [MESSAGE_COLLAPSED_LINES] 行 */
+        /** 正文折叠行数，与 item_home_feed.xml 里 message 的 maxLines 保持一致 */
         private val collapsedLines: Int
-            get() = UiSkin.f("feed.messageMaxLines")?.toInt()?.takeIf { it > 0 }
-                ?: MESSAGE_COLLAPSED_LINES
+            get() = MESSAGE_COLLAPSED_LINES
 
         companion object {
             /** 正文折叠行数，与 item_home_feed.xml 里 message 的 maxLines 保持一致 */
