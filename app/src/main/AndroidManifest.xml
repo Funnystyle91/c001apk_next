@@ -420,6 +420,9 @@
             android:name=".ui.history.HistoryActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.offline.OfflineCacheActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.event.EventDetailActivity"
             android:exported="false" />
         <activity

@@ -33,7 +33,7 @@
                 android:orientation="horizontal">
 
                 <LinearLayout
-                    android:id="@+id/feedLayout"
+                    android:id="@+id/offlineLayout"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -48,8 +48,8 @@
                     <ImageView
                         android:layout_width="24dp"
                         android:layout_height="24dp"
-                        android:src="@drawable/ic_feed"
-                        app:tint="#ff4039"
+                        android:src="@drawable/ic_archive"
+                        app:tint="#4caf50"
                         tools:ignore="ContentDescription" />
 
                     <TextView
@@ -57,7 +57,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:maxLines="1"
-                        android:text="@string/my_feed"
+                        android:text="@string/offline_cache"
                         android:textColor="?android:textColorSecondary"
                         android:textSize="12sp" />
 

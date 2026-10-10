@@ -19,12 +19,14 @@ import com.example.c001apk.databinding.FragmentCollectionPickBinding
 import com.example.c001apk.databinding.ItemCollectionPickBinding
 import com.example.c001apk.logic.model.CollectionAction
 import com.example.c001apk.logic.model.CollectionData
+import com.example.c001apk.logic.repository.OfflineCacheRepo
 import com.example.c001apk.util.Event
 import com.example.c001apk.util.ImageUtil
 import com.example.c001apk.util.makeToast
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * 收藏到收藏夹：点条目收藏/取消收藏，长按改收藏夹（标题/简介/公开私密/封面），右上角新建。
@@ -41,6 +43,9 @@ class CollectionPickBottomSheet : BottomSheetDialogFragment() {
 
     private var feedId: String = ""
     private var editCoverUri: Uri? = null
+
+    @Inject
+    lateinit var offlineCacheRepo: OfflineCacheRepo
 
     /** 收藏结果通知外面（详情页底栏改收藏数 + 点亮/熄灭星标），参数是服务端回的最新状态 */
     var onChanged: ((CollectionAction) -> Unit)? = null
@@ -70,6 +75,16 @@ class CollectionPickBottomSheet : BottomSheetDialogFragment() {
         binding.recyclerView.adapter = adapter
         binding.recyclerView.layoutManager = LinearLayoutManager(requireContext())
         binding.newCollection.setOnClickListener { showEditDialog(null) }
+
+        // 离线缓存是这个面板里唯一不依赖联网的一步：收藏夹列表拉不到它也能用
+        binding.offlineCache.setOnClickListener { offlineCacheRepo.saveAsync(feedId) }
+        offlineCacheRepo.savingIds.observe(viewLifecycleOwner) {
+            val saving = feedId in it
+            binding.offlineCache.isEnabled = !saving
+            binding.offlineCache.text = getString(
+                if (saving) R.string.offline_cache_saving else R.string.offline_cache
+            )
+        }
 
         viewModel.list.observe(viewLifecycleOwner) {
             adapter.submitList(it)

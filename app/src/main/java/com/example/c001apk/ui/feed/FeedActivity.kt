@@ -24,6 +24,8 @@ class FeedActivity : BaseViewActivity<FeedViewModel>() {
                     intent.getStringExtra("id").orEmpty(),
                     intent.getStringExtra("rid"),
                     intent.getBooleanExtra("viewReply", false),
+                    // 离线详情：id 就是存档主键，数据全读本机，不发请求
+                    intent.getBooleanExtra("offline", false),
                 )
             }
         }

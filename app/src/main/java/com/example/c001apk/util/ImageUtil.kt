@@ -72,16 +72,19 @@ object ImageUtil {
     @SuppressLint("CheckResult")
     fun showIMG(view: ImageView, url: String?, isCover: Boolean = false) {
         if (!url.isNullOrEmpty()) {
-            val newUrl = GlideUrl(
+            // 离线存档的图是本机文件（见 UrlUtil.LOCAL_IMAGE_SCHEME）：交给 Glide 的 File
+            // 加载器。不能喂 GlideUrl —— 那一路是 OkHttp，只认 http(s)，见 file:// 直接抛
+            val localPath = url.localImagePath
+            val model: Any = if (localPath != null) File(localPath) else GlideUrl(
                 url.http2https,
                 LazyHeaders.Builder().addHeader("User-Agent", USER_AGENT).build()
             )
             Glide
                 .with(view).apply {
-                    if (url.endsWith(".gif"))
+                    if (localPath == null && url.endsWith(".gif"))
                         asGif()
                 }
-                .load(newUrl).apply {
+                .load(model).apply {
                     if (isCover) {
                         transform(ColorFilterTransformation(Color.parseColor("#8A000000")))
                     } else if (ResourceUtils.isNightMode(view.context.resources.configuration)
@@ -169,6 +172,33 @@ object ImageUtil {
         }
 
     /**
+     * 把一张图下到指定文件，返回文件绝对路径，失败返回 null。
+     *
+     * 走 Glide 的 `submit().get()` 而不是自己开 OkHttp：离线缓存要下的图，用户刚才在详情页
+     * 多半已经看过，直接命中 Glide 磁盘缓存就不用再走一次网络（[DiskCacheStrategy.ALL] 保证
+     * 源文件也被缓存）。`get()` 会阻塞当前线程，必须切到 IO。
+     */
+    suspend fun downloadToFile(context: Context, url: String, target: File): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val file = Glide.with(context.applicationContext)
+                    .asFile()
+                    .load(
+                        GlideUrl(
+                            url.http2https,
+                            LazyHeaders.Builder().addHeader("User-Agent", USER_AGENT).build()
+                        )
+                    )
+                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .submit()
+                    .get()
+                target.parentFile?.mkdirs()
+                file.copyTo(target, overwrite = true)
+                target.absolutePath
+            }.getOrNull()
+        }
+
+    /**
      * 算私信气泡里的图片该显示多大（px）。
      *
      * 之前的写法是死宽 180dp + CenterCrop，横图竖图都挤成同一条，这里改成按比例：
@@ -222,7 +252,7 @@ object ImageUtil {
         }
     }
 
-    private suspend fun saveImageToGallery(ctx: Context, imageUrl: String): Boolean =
+    private suspend fun saveImageToGallery(ctx: Context, url: String): Boolean =
         withContext(Dispatchers.IO) {
             var success = false
 
@@ -232,7 +262,8 @@ object ImageUtil {
             try {
                 val file = Glide.with(ctx)
                     .asFile()
-                    .load(imageUrl.http2https)
+                    // url.imageUrl：本机图原样（file://），网络图才做 http2https
+                    .load(url.imageUrl)
                     .submit()
                     .get()
                 val image = File(imagesDir, filename)
@@ -282,7 +313,7 @@ object ImageUtil {
                     context.makeToast("文件已存在")
                 }
         } else {
-            downloadPicture(context, url.http2https, filename, isEnd)
+            downloadPicture(context, url.imageUrl, filename, isEnd)
         }
     }
 
@@ -362,11 +393,10 @@ object ImageUtil {
         val thumbList: MutableList<String> = ArrayList()
         val originList: MutableList<String> = ArrayList()
         urlList.forEach {
-            if (it.endsWith(".s.jpg"))
-                originList.add(it.replace(".s.jpg", "").http2https)
-            else
-                originList.add(it.http2https)
-            thumbList.add(it.http2https)
+            // 本机图（离线存档）交给 imageUrl：原样 file:// 并把尺寸提示 / `.s.jpg` 摘掉；
+            // 网络图维持原样（原图摘掉缩略后缀，缩略图直接给带后缀的那条）
+            originList.add(it.removeSuffix(".s.jpg").imageUrl)
+            thumbList.add(if (it.isLocalImage) it.imageUrl else it.http2https)
         }
         Mojito.start(imageView.context) {
             urls(thumbList, originList)
@@ -437,8 +467,8 @@ object ImageUtil {
         val thumbList = ArrayList<String>()
         val originList = ArrayList<String>()
         imgList.forEach {
-            thumbList.add("${it.http2https}.s.jpg")
-            originList.add(it.http2https)
+            thumbList.add(it.thumbImageUrl)
+            originList.add(it.imageUrl)
         }
         Mojito.start(context) {
             urls(thumbList, originList)
@@ -484,7 +514,7 @@ object ImageUtil {
         imageView: ImageView,
         url: String
     ) {
-        imageView.mojito(url.http2https) {
+        imageView.mojito(url.imageUrl) {
             progressLoader {
                 DefaultPercentProgress()
             }
@@ -497,7 +527,7 @@ object ImageUtil {
                     position: Int
                 ) {
                     if (fragmentActivity != null) {
-                        showSaveImgDialog(fragmentActivity, url.http2https, null)
+                        showSaveImgDialog(fragmentActivity, url.imageUrl, null)
                     } else {
                         Log.i("Mojito", "fragmentActivity is null, skip save image")
                     }
@@ -510,7 +540,7 @@ object ImageUtil {
         context: Context,
         url: String
     ) {
-        startBigImgViewSimple(context, listOf(url.http2https))
+        startBigImgViewSimple(context, listOf(url.imageUrl))
     }
 
 
@@ -533,11 +563,13 @@ object ImageUtil {
     }
 
     private fun downloadPicture(context: Context, url: String?, fileName: String, isEnd: Boolean) {
-        val newUrl = GlideUrl(
-            url?.http2https,
+        // 本机图（离线存档）不用再下载：直接 load 一个 File，Glide 会把源文件原样交回来
+        val localPath = url?.localImagePath
+        val model: Any = if (localPath != null) File(localPath) else GlideUrl(
+            url?.imageUrl,
             LazyHeaders.Builder().addHeader("User-Agent", USER_AGENT).build()
         )
-        Glide.with(context).downloadOnly().load(newUrl).into(object : FileTarget() {
+        Glide.with(context).downloadOnly().load(model).into(object : FileTarget() {
             override fun onLoadFailed(errorDrawable: Drawable?) {
                 super.onLoadFailed(errorDrawable)
                 Toast.makeText(context, "download failed", Toast.LENGTH_SHORT).show()

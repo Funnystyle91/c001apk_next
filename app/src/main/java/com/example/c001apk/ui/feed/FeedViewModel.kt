@@ -13,6 +13,7 @@ import com.example.c001apk.logic.model.TotalReplyResponse
 import com.example.c001apk.logic.repository.BlackListRepo
 import com.example.c001apk.logic.repository.HistoryFavoriteRepo
 import com.example.c001apk.logic.repository.NetworkRepo
+import com.example.c001apk.logic.repository.OfflineCacheRepo
 import com.example.c001apk.ui.base.BaseAppViewModel
 import com.example.c001apk.util.Event
 import com.google.gson.Gson
@@ -29,10 +30,18 @@ import kotlinx.coroutines.withContext
 class FeedViewModel @AssistedInject constructor(
     @Assisted("id") val id: String,
     @Assisted("frid") var frid: String?,
-    @Assisted var isViewReply: Boolean,
+    @Assisted("viewReply") var isViewReply: Boolean,
+    /**
+     * 离线详情：正文和评论全部读本机存档（[OfflineCacheRepo]），一个请求都不发。
+     *
+     * 走这条路径时原帖可能已经被删、设备也可能没网，所以除渲染以外的一切都得关掉
+     * （点赞 / 收藏 / 回复 / 加载更多 / 下拉刷新，见 FeedFragment 里的守卫）。
+     */
+    @Assisted("offline") val isOffline: Boolean,
     blackListRepo: BlackListRepo,
     historyRepo: HistoryFavoriteRepo,
-    networkRepo: NetworkRepo
+    networkRepo: NetworkRepo,
+    private val offlineCacheRepo: OfflineCacheRepo
 ) : BaseAppViewModel(blackListRepo, historyRepo, networkRepo) {
 
     @AssistedFactory
@@ -40,7 +49,8 @@ class FeedViewModel @AssistedInject constructor(
         fun create(
             @Assisted("id") id: String,
             @Assisted("frid") frid: String?,
-            isViewReply: Boolean
+            @Assisted("viewReply") isViewReply: Boolean,
+            @Assisted("offline") isOffline: Boolean
         ): FeedViewModel
     }
 
@@ -151,6 +161,16 @@ class FeedViewModel @AssistedInject constructor(
     }
 
     fun fetchFeedReply() {
+        if (isOffline) {
+            // 存档里的评论在建 Fragment 之前就装好了（见 loadOffline），这里只负责把
+            // 分页标志收干净：不下拉、不加载更多，Footer 直接收尾
+            feedReplyData.postValue(offlineReplyList ?: emptyList())
+            isRefreshing = false
+            isLoadMore = false
+            isEnd = true
+            footerState.postValue(FooterState.LoadingEnd(LOADING_END))
+            return
+        }
         // 详情和评论首屏是并发发的：详情页"列表项直出首屏"那条路径里 Activity 不等详情就先建了
         // Fragment，于是评论请求和详情请求同时在飞。而 isRefreshing / isLoadMore 是**共用**的分页
         // 标志，只要半路有人把它俩清掉（详情请求曾经就会，见 fetchFeedData），评论回来时就判到自己
@@ -259,6 +279,10 @@ class FeedViewModel @AssistedInject constructor(
     val feedDataUpdateState = MutableLiveData<Event<Boolean>>()
 
     fun fetchFeedData() {
+        if (isOffline) {
+            viewModelScope.launch(Dispatchers.IO) { loadOffline() }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             networkRepo.getFeedContent(id, frid)
                 .collect { result ->
@@ -286,6 +310,52 @@ class FeedViewModel @AssistedInject constructor(
         }
     }
 
+    /** 离线存档里的评论（[isOffline] 时才非空），展示态装饰在 [loadOffline] 里一次做完 */
+    private var offlineReplyList: List<TotalReplyResponse.Data>? = null
+
+    /**
+     * 离线详情：正文和置顶评论取详情存档，前 20 条评论取评论存档，全程不发请求。
+     *
+     * 存档里存的是接口原样 JSON（图片早已换成本机地址），解出来直接喂给 [handleFeedData]，
+     * 和在线共用同一条渲染路径 —— 断网、原帖被删都不影响。
+     */
+    private suspend fun loadOffline() {
+        val entity = offlineCacheRepo.get(id)
+        val data = entity?.let { offlineCacheRepo.feedDataOf(it) }
+        if (entity == null || data == null) {
+            activityState.postValue(LoadingState.LoadingError("离线缓存已损坏或已被删除"))
+            return
+        }
+        feedData = data
+        isPreview = false
+        handleFeedData()
+        // 补 [楼主] 标记要读 feedUid，所以必须排在 handleFeedData 之后
+        offlineReplyList = offlineCacheRepo.replyListOf(entity).mapNotNull { decorateReply(it) }
+        activityState.postValue(LoadingState.LoadingDone)
+        feedDataUpdateState.postValue(Event(true))
+    }
+
+    /**
+     * 把存档里的评论回放成展示态：补 `[楼主]`、套 [generateMess] 补楼中楼的层主/楼主标记，
+     * 并且照在线那套过滤黑名单、掐掉已经在置顶项里的那一条。
+     *
+     * 存档存的是接口原始数据（评论是请求回来就直接落盘的，没过在线那套装饰），
+     * 所以这些都得在这里补一遍，否则离线看评论区会缺标记、置顶项还会重一份。
+     */
+    private fun decorateReply(reply: TotalReplyResponse.Data): TotalReplyResponse.Data? {
+        if (reply.entityType != "feed_reply") return null
+        if (reply.id == topReplyId || reply.id == replyMeId) return null
+        if (blackListRepo.checkUid(reply.uid)) return null
+
+        reply.username = "${reply.username}${if (reply.uid == feedUid) " [楼主]" else ""}"
+        if (!reply.replyRows.isNullOrEmpty()) {
+            reply.replyRows = reply.replyRows
+                ?.filter { !blackListRepo.checkUid(it.uid) }
+                ?.map { it.copy(message = generateMess(it, feedUid, reply.uid)) }
+                ?.toMutableList()
+        }
+        return reply
+    }
 
     private fun generateMess(
         reply: TotalReplyResponse.Data,

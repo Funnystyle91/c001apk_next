@@ -11,14 +11,17 @@ import com.example.c001apk.ui.collection.CollectionActivity
 import com.example.c001apk.ui.follow.FFFListActivity
 import com.example.c001apk.ui.history.HistoryActivity
 import com.example.c001apk.ui.others.WebViewActivity
+import com.example.c001apk.ui.offline.OfflineCacheActivity
 import com.example.c001apk.util.IntentUtil
 import com.example.c001apk.util.PrefManager
 
 /**
- * 「我的」页功能宫格（8 格）：我的动态 / 我的关注 / 我的收藏 / 我的赞 /
+ * 「我的」页功能宫格（8 格）：离线缓存 / 我的关注 / 我的收藏 / 我的赞 /
  * 我的回复 / 我的常去 / 浏览历史 / 我的装备。
  *
  * 跳转参数沿用原来的 item_message_mine 卡片（FFFListActivity 的 type 取值等都没动）。
+ * 第一格原来是「我的动态」，用户的动态列表在个人页头部点头像/动态就能进，作用重复，
+ * 位置腾给了离线缓存（不需要登录，未登录也该能看自己存过的东西）。
  */
 class MineMenuAdapter : RecyclerView.Adapter<MineMenuAdapter.MenuViewHolder>() {
 
@@ -26,11 +29,11 @@ class MineMenuAdapter : RecyclerView.Adapter<MineMenuAdapter.MenuViewHolder>() {
         RecyclerView.ViewHolder(binding.root), View.OnClickListener {
 
         init {
-            // 装备 / 浏览历史不需要登录；其余入口登录后才可点
+            // 离线缓存 / 装备 / 浏览历史不需要登录；其余入口登录后才可点
+            binding.offlineLayout.setOnClickListener(this)
             binding.equipmentLayout.setOnClickListener(this)
             binding.historyLayout.setOnClickListener(this)
             if (PrefManager.isLogin) {
-                binding.feedLayout.setOnClickListener(this)
                 binding.followLayout.setOnClickListener(this)
                 binding.favLayout.setOnClickListener(this)
                 binding.likeLayout.setOnClickListener(this)
@@ -41,12 +44,9 @@ class MineMenuAdapter : RecyclerView.Adapter<MineMenuAdapter.MenuViewHolder>() {
 
         override fun onClick(view: View?) {
             when (view?.id) {
-                R.id.feedLayout ->
-                    if (PrefManager.isLogin)
-                        IntentUtil.startActivity<FFFListActivity>(itemView.context) {
-                            putExtra("type", "feed")
-                            putExtra("uid", PrefManager.uid)
-                        }
+                R.id.offlineLayout ->
+                    IntentUtil.startActivity<OfflineCacheActivity>(itemView.context) {
+                    }
 
                 R.id.followLayout ->
                     if (PrefManager.isLogin)

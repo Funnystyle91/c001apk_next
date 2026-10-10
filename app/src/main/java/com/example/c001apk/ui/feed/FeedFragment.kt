@@ -131,6 +131,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
 
     private fun initRefresh() {
         binding.swipeRefresh.apply {
+            // 离线缓存只有本机这一份数据，没有"刷新"这回事：关掉手势，别下拉出一个永远转不完的圈
+            isEnabled = !viewModel.isOffline
             setColorSchemeColors(
                 MaterialColors.getColor(
                     requireContext(),
@@ -148,7 +150,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
     }
 
     private fun initReplyBtn(height: Int) {
-        if (PrefManager.isLogin) {
+        // 离线下发不出回复，这个 FAB 露出来只会点出一堆失败
+        if (PrefManager.isLogin && !viewModel.isOffline) {
             binding.reply.apply {
                 isVisible = true
                 layoutParams = CoordinatorLayout.LayoutParams(
@@ -294,7 +297,7 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
             viewModel.listSize = it.size
             // 数据加载后才知道作者，只有自己的动态才能改可见性
             binding.toolBar.menu.findItem(R.id.publishStatus)?.isVisible =
-                PrefManager.isLogin && PrefManager.uid == viewModel.feedUid
+                PrefManager.isLogin && PrefManager.uid == viewModel.feedUid && !viewModel.isOffline
             feedReplyAdapter.submitList(it)
             if (viewModel.isViewReply) {
                 viewModel.isViewReply = false
@@ -368,6 +371,9 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
 
         binding.replyCount.text = "共 ${viewModel.replyCount} 回复"
         setListType()
+        // 排序条在离线缓存里没有意义（见 showSort 那条），先收起来，
+        // 免得等装饰器第一次回调之前先闪一下
+        if (viewModel.isOffline) binding.tabLayout.isVisible = false
 
         binding.recyclerView.apply {
             adapter =
@@ -405,7 +411,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
                         StickyItemDecorator(requireContext(), 1, { viewModel.itemCount },
                             object : StickyItemDecorator.SortShowListener {
                                 override fun showSort(show: Boolean) {
-                                    binding.tabLayout.isVisible = show
+                                    // 离线缓存只有存档里那 20 条，换排序是重新分页，没得换
+                                    binding.tabLayout.isVisible = show && !viewModel.isOffline
                                 }
                             })
                     )
@@ -431,7 +438,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
             inflateMenu(R.menu.feed_menu)
 
             menu.findItem(R.id.showReply).isVisible = isPortrait
-            menu.findItem(R.id.report).isVisible = PrefManager.isLogin
+            // 举报要联网、可见性要回写服务端，离线缓存里都做不了
+            menu.findItem(R.id.report).isVisible = PrefManager.isLogin && !viewModel.isOffline
             menu.findItem(R.id.showQuestion).isVisible = viewModel.feedType == "answer"
 
             setOnMenuItemClickListener {
@@ -493,6 +501,16 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
         }
     }
 
+    /**
+     * 离线缓存页面里凡是需要联网的动作都从这里回一声。
+     *
+     * 不静默吞掉是因为这些按钮（点赞、收藏、关注、回复）都长在明面上，点了没反应
+     * 会被当成卡死；回一句才知道是"这个页面不支持"。
+     */
+    private fun offlineHint() {
+        requireContext().makeToast(getString(R.string.offline_unsupported))
+    }
+
     inner class ReloadListener : FooterAdapter.FooterListener {
         override fun onReLoad() {
             viewModel.isEnd = false
@@ -503,6 +521,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
     inner class RefreshReplyListener : ReplyRefreshListener {
         @SuppressLint("InflateParams")
         override fun onRefreshReply(listType: String) {
+            // 离线缓存里只有存档的那 20 条，换排序要重新分页，做不了
+            if (viewModel.isOffline) return
             viewModel.listType = listType
             setListType()
             viewModel.firstItem = null
@@ -566,6 +586,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
             isViewReply: Any?,
             feedData: Any?
         ) {
+            // 离线缓存里点作者头像 / 转发卡片都得开新页去联网，没有能到的地方
+            if (viewModel.isOffline) return
             super.onViewFeed(
                 view,
                 id,
@@ -587,6 +609,7 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
         }
 
         override fun onFollowUser(uid: String, followAuthor: Int) {
+            if (viewModel.isOffline) return offlineHint()
             if (PrefManager.isLogin) {
                 val url = if (followAuthor == 1) "/v6/user/unfollow" else "/v6/user/follow"
                 viewModel.onFollowUnFollow(url, uid, followAuthor)
@@ -603,13 +626,16 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
         ) {
             PopupMenu(view.context, view).apply {
                 menuInflater.inflate(R.menu.feed_reply_menu, menu).apply {
-                    menu.findItem(R.id.delete).isVisible = PrefManager.uid == uid
-                    menu.findItem(R.id.report).isVisible = PrefManager.isLogin
+                    // 删 / 举报 / 置顶都要联网回写，离线缓存里只留「查看回复」和「复制」
+                    menu.findItem(R.id.delete).isVisible =
+                        PrefManager.uid == uid && !viewModel.isOffline
+                    menu.findItem(R.id.report).isVisible = PrefManager.isLogin && !viewModel.isOffline
                     // 置顶：只有帖主能操作，而且接口置顶的是「动态的回复」，
                     // 所以二级回复（rPosition 有效）不给这一项。标题按当前状态切换。
                     menu.findItem(R.id.stickTop)?.apply {
                         isVisible = PrefManager.isLogin &&
                                 PrefManager.uid == viewModel.feedUid &&
+                                !viewModel.isOffline &&
                                 (rPosition == null || rPosition == -1)
                         title = view.context.getString(
                             if (id == viewModel.topReplyId) R.string.unstick_top
@@ -642,6 +668,7 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
                 isShowReply = false
                 return
             }
+            if (viewModel.isOffline) return offlineHint()
             if (PrefManager.isLogin) {
                 viewModel.rid = id
                 viewModel.cuid = cuid
@@ -655,6 +682,7 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
         }
 
         override fun onLikeClick(type: String, id: String, isLike: Int) {
+            if (viewModel.isOffline) return offlineHint()
             if (PrefManager.isLogin)
                 if (type == "feed")
                     viewModel.onLikeFeed(id, isLike)
@@ -663,6 +691,8 @@ class FeedFragment : BaseFragment<FragmentFeedBinding>() {
         }
 
         override fun onFavoriteClick(id: String?) {
+            // 离线缓存里收藏夹列表、新建、加/取消收藏全都要联网，面板点开也是空的
+            if (viewModel.isOffline) return offlineHint()
             // 服务端多收藏夹：选择 / 取消收藏 / 新建 / 长按编辑。
             // 收藏数是服务端回的，回来后整条重绑卡片（见 feedFavState）
             CollectionPickBottomSheet().apply {
