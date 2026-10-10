@@ -57,11 +57,14 @@ class AppAdapter(
 ) : BaseAdapter<ViewDataBinding>() {
 
     /**
-     * feedCover 也按完整动态卡排。个人主页「图文」tab 实测在同一个列表里混下发两种模板
-     * （17 条里 5 条 feedCover、12 条 feed），照模板分派会在一页里混出两种卡片；
-     * 官方那一页与同页「动态」排法一致，所以整页统一走完整卡。
+     * 用户内容列表里的 feedCover 也按完整动态卡排。
+     *
+     * 个人主页「动态」「图文」tab、我的动态 / 我的赞 / 我的回复 / 我的常去这些列表会把
+     * 文章（entityTemplate=feedCover）和普通动态混在同一个列表里下发（htmlFeedList 实测
+     * 17 条里 6 条 feedCover、11 条 feed），照模板分派会在一页里混出「紧凑封面卡 /
+     * 完整动态卡」两种排法，而要求是整页长一样。
      * 由 BaseAppFragment 按 ViewModel 的 feedCoverAsFeed 置位，默认 false ——
-     * 首页 / 教程页 / 产品页晒单 / 数码首页下发 feedCover 时仍走紧凑卡（viewType 27）。
+     * 首页 / 教程页 / 产品页晒单 / 数码首页那些发现流仍走紧凑卡（viewType 27）。
      */
     var feedCoverAsFeed: Boolean = false
 
@@ -1261,7 +1264,7 @@ class AppAdapter(
 
             // 封面式动态（feedCover）：教程页 / 产品页晒单 / 数码首页下发的是「标题 + 摘要 +
             // 右侧 106dp 封面图」的紧凑卡，跟完整动态卡排法不一样，单独一个 viewType。
-            // 个人主页「图文」tab 例外（feedCoverAsFeed）：那一页要和「动态」对齐，一律走完整卡
+            // 用户内容列表例外（feedCoverAsFeed，见字段注释）：那一类页面整页要和普通动态长一样
             "feed" -> when {
                 !feedCoverAsFeed && currentList[position].entityTemplate == "feedCover" -> 27
                 else -> 2

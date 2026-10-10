@@ -53,11 +53,14 @@ class UserTabViewModel @AssistedInject constructor(
     }
 
     /**
-     * 「图文」tab 的接口在同一个列表里混下发两种模板（实测 17 条里 5 条 entityTemplate=feedCover、
-     * 12 条 feed），照模板分派会在同一页里混出「紧凑封面卡 / 完整动态卡」两种排法。官方这一页
-     * 与同页「动态」排法一致，所以整页统一按完整动态卡渲染（见 AppAdapter.feedCoverAsFeed）。
+     * 个人主页「动态」「图文」两个 tab 整页统一按完整动态卡渲染。
+     *
+     * 这两个接口都会在同一个列表里混下发两种模板（htmlFeedList 实测 17 条里 6 条
+     * entityTemplate=feedCover、11 条 feed），照模板分派会在一页里混出「紧凑封面卡 /
+     * 完整动态卡」两种排法。要求是这一页的文章跟同页普通动态长一样，所以 feedCover 不单独排版
+     * （开关见 AppAdapter.feedCoverAsFeed）。
      */
-    override val feedCoverAsFeed: Boolean get() = type == "article"
+    override val feedCoverAsFeed: Boolean get() = type == "article" || type == "feed"
 
     // 这些列表官方都是翻页取（page），只有动态支持 lastItem
     private suspend fun request(): Flow<Result<HomeFeedResponse>> = when (type) {

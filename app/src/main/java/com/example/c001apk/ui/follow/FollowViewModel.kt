@@ -37,6 +37,11 @@ class FollowViewModel @AssistedInject constructor(
 
     @Suppress("UNCHECKED_CAST")
     companion object {
+        /**
+         * 这几个 type 都是「某人的内容列表」，整页按完整动态卡排（见 [feedCoverAsFeed]）。
+         */
+        private val FULL_CARD_LISTS = setOf("feed", "like", "reply", "replyToMe", "recentHistory")
+
         fun provideFactory(
             assistedFactory: Factory,
             uid: String,
@@ -47,6 +52,16 @@ class FollowViewModel @AssistedInject constructor(
             }
         }
     }
+
+    /**
+     * 用户内容列表里的文章（entityTemplate=feedCover）也按完整动态卡渲染。
+     *
+     * 「我的动态」实测在同一个列表里混下发两种模板（文章是 feedCover、普通动态是 feed），
+     * 照模板分派会让文章变成一张没有头像 / 用户名的紧凑封面卡，要求它跟同页动态长一样，
+     * 所以整页统一走完整卡（开关见 AppAdapter.feedCoverAsFeed）。
+     * 首页 / 教程页 / 数码首页 / 产品页晒单那些发现流仍然用紧凑封面卡，不受这里影响。
+     */
+    override val feedCoverAsFeed: Boolean get() = type in FULL_CARD_LISTS
 
     val tabList = ArrayList<String>()
     var title: String? = null
