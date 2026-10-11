@@ -262,6 +262,18 @@ jobs:
             exit 1
           fi
 
+          # 自动打的版本 Release（V1.0.5 这种）也挂上同一份 APK，作为该版本的永久归档，
+          # 与历史上手工建的 V1.0.3 / V1.0.4 形态一致。
+          # asset 名含版本号（c001apk_next-V1.0.5-release.10005.apk），与 release-latest 不冲突。
+          # VERSION 就是上面刚解析出来的那个（main 上是 +1 后的号）。
+          if [ "${GITHUB_REF_NAME}" = "main" ] && gh release view "$VERSION" >/dev/null 2>&1; then
+            if gh release upload "$VERSION" "${FILES[@]}" --clobber; then
+              echo "::notice::已把产物归档到 Release ${VERSION}"
+            else
+              echo "::warning::产物归档到 Release ${VERSION} 失败（tag 已建好，不影响发布）"
+            fi
+          fi
+
           # 把本次发行版的位置写进 run summary 和 annotation，方便直接拿链接。
           # asset 名由 GitHub 规范化（文件名里的 ( ) 会变成 .），所以链接以服务端返回的名字为准
           export BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
@@ -292,6 +304,44 @@ jobs:
               commit -m "chore(release): ${{ steps.ver.outputs.name }}（versionCode ${{ steps.ver.outputs.code }}）[skip ci]"
           git push origin HEAD:main
           echo "::notice::已把 ${{ steps.ver.outputs.name }}（${{ steps.ver.outputs.code }}）写回 main，下次发布在此基础上 +1"
+
+      # 正式版自动打版本 tag（如 V1.0.5），指向本次发布用的提交。
+      # 以前每次发版都要手工补一个 V1.0.x，容易忘、也容易指错提交；这里自动化。
+      # 只打在 main 上：debug 与 main 同号（版本号是共用的），打 tag 会撞名。
+      # 位置在 Commit bumped version 之后，保证 tag 指向的提交
+      # 已经包含版本号写回，与历史上 V1.0.4 的指向方式一致。
+      - name: Create version tag
+        if: success() && github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.name }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::没有解析出版本名，拒绝打 tag"
+            exit 1
+          fi
+          # 幂等：tag 或同名 Release 已存在就跳过（重跑 workflow / 回滚重发时不会报错）
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::notice::tag ${TAG} 已存在，跳过"
+          else
+            git -c user.name='github-actions[bot]' \
+                -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                tag -a "${TAG}" -m "c001apk_next ${TAG}（versionCode ${{ steps.ver.outputs.code }}）"
+            git push origin "refs/tags/${TAG}"
+            echo "::notice::已自动打 tag ${TAG} → ${GITHUB_SHA:0:7}"
+          fi
+          # 同时建一个同名 Release 作为该版本的固定归档入口。
+          # 注意：Release 页面会挂 commit 的自动源码包，所以一定要带说明文字，
+          # 否则那个页面是空的。正式 APK 仍由下面的 release-latest 承载。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release ${TAG} 已存在，跳过"
+          else
+            gh release create "$TAG" --title "${TAG}" --target "$GITHUB_SHA" \
+              --notes "版本归档：${TAG}（versionCode ${{ steps.ver.outputs.code }}）。
+          正式版 APK 在 [release-latest](https://github.com/${GITHUB_REPOSITORY}/releases/tag/release-latest)；此处只作为该版本的固定 tag / commit 归档。" \
+              2>/dev/null || echo "::warning::Release ${TAG} 创建失败（可能被分支保护或权限限制），tag 已建好，不影响发布"
+          fi
 
       # 失败时把 Gradle 日志尾部转成 annotation，
       # 这样在 Actions 页面和失败通知邮件里就能直接看到原因，不用再翻完整日志
