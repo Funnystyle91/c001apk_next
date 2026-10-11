@@ -213,15 +213,18 @@ class ParamsPreferenceFragment : PreferenceFragmentCompat(), SharedPreferences.O
                     setNeutralButton(R.string.system_info) { _, _ ->
                         PrefManager.MANUFACTURER = android.os.Build.MANUFACTURER
                         PrefManager.xAppDevice = getDeviceCode(false)
+                        markCustomFingerprint()
                     }
                     setPositiveButton(android.R.string.ok) { _, _ ->
                         PrefManager.MANUFACTURER =
                             editText.text.toString().ifEmpty { randomManufacturer() }
                         PrefManager.xAppDevice = getDeviceCode(false)
+                        markCustomFingerprint()
                     }
                     setNegativeButton(R.string.random_value) { _, _ ->
                         PrefManager.MANUFACTURER = randomManufacturer()
                         PrefManager.xAppDevice = getDeviceCode(false)
+                        markCustomFingerprint()
                     }
                 }.create().apply {
                     window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -252,16 +255,19 @@ class ParamsPreferenceFragment : PreferenceFragmentCompat(), SharedPreferences.O
                         PrefManager.BRAND = android.os.Build.BRAND
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setPositiveButton(android.R.string.ok) { _, _ ->
                         PrefManager.BRAND = editText.text.toString().ifEmpty { randomBrand() }
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setNegativeButton(R.string.random_value) { _, _ ->
                         PrefManager.BRAND = randomBrand()
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                 }.create().apply {
                     window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -292,17 +298,20 @@ class ParamsPreferenceFragment : PreferenceFragmentCompat(), SharedPreferences.O
                         PrefManager.MODEL = android.os.Build.MODEL
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setPositiveButton(android.R.string.ok) { _, _ ->
                         PrefManager.MODEL =
                             editText.text.toString().ifEmpty { randomDeviceModel() }
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setNegativeButton(R.string.random_value) { _, _ ->
                         PrefManager.MODEL = randomDeviceModel()
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                 }.create().apply {
                     window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -333,17 +342,20 @@ class ParamsPreferenceFragment : PreferenceFragmentCompat(), SharedPreferences.O
                         PrefManager.BUILDNUMBER = android.os.Build.DISPLAY
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setPositiveButton(android.R.string.ok) { _, _ ->
                         PrefManager.BUILDNUMBER =
                             editText.text.toString().ifEmpty { randHexString(16) }
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                     setNegativeButton(R.string.random_value) { _, _ ->
                         PrefManager.BUILDNUMBER = randHexString(16)
                         PrefManager.xAppDevice = getDeviceCode(false)
                         updateUserAgent()
+                        markCustomFingerprint()
                     }
                 }.create().apply {
                     window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -548,14 +560,33 @@ class ParamsPreferenceFragment : PreferenceFragmentCompat(), SharedPreferences.O
 
     }
 
-    /** 「本机机型检测」条目摘要：本机型号 + 当前是否按它上报 */
+    /** 「本机机型检测」条目摘要：本机型号 + 当前实际用的是哪一组机型 */
     private fun updateRealDeviceSummary() {
         findPreference<SwitchPreferenceCompat>("reportRealDevice")?.isChecked =
             PrefManager.reportRealDevice
         findPreference<Preference>("realDeviceInfo")?.summary = detectRealDevice().let {
             "${it.brand} ${it.model}（Android ${it.androidVersion}）" +
-                if (PrefManager.reportRealDevice) " · 上报中" else " · 未上报（用默认机型）"
+                when {
+                    // 手改过机型 → 开关已被自定义值接管，如实说明，免得用户以为开关失灵
+                    PrefManager.customFingerprint ->
+                        " · 当前用自定义机型（${PrefManager.BRAND} ${PrefManager.MODEL}）"
+
+                    PrefManager.reportRealDevice -> " · 上报中"
+                    else -> " · 未上报（用默认机型）"
+                }
         }
+    }
+
+    /**
+     * 参数页里手改机型字段 → 视为「用户显式指定了自定义设备串」。
+     *
+     * 不置位的话，下一次请求 [getLastingDeviceCode] 会按「上报真实机型」开关把整组字段纠正回去
+     * （开 → 本机机型，关 → 一加13），刚改的机型当场被抹掉。切一次「上报真实机型」开关，
+     * 或点 X-App-Device 的「恢复默认」，就会把它清回 false、交还给自动流程。
+     */
+    private fun markCustomFingerprint() {
+        PrefManager.customFingerprint = true
+        updateRealDeviceSummary()
     }
 
     private fun updateUserAgent() {

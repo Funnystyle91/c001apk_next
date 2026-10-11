@@ -83,7 +83,7 @@ object PrefManager {
     /**
      * 用户是否**显式**指定过自定义 X-App-Device。
      *
-     * 只有「设置 - 参数 - X-App-Device」里手填/重新生成才会置位；
+     * 「设置 - 参数」里手填 X-App-Device、点「重新生成」、或改厂商/品牌/型号/版本号任一项都会置位；
      * 未置位时 [com.example.c001apk.util.TokenDeviceUtils.getLastingDeviceCode] 会把设备串
      * 强制拉回官方认可的那一组（否则详情页会被风控要求验证码）。
      */
