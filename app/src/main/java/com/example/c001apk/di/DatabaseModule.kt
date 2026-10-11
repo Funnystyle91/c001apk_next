@@ -6,10 +6,12 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.c001apk.logic.dao.HistoryFavoriteDao
 import com.example.c001apk.logic.dao.HomeMenuDao
+import com.example.c001apk.logic.dao.OfflineCacheDao
 import com.example.c001apk.logic.dao.RecentAtUserDao
 import com.example.c001apk.logic.dao.StringEntityDao
 import com.example.c001apk.logic.database.BrowseHistoryDatabase
 import com.example.c001apk.logic.database.HomeMenuDatabase
+import com.example.c001apk.logic.database.OfflineCacheDatabase
 import com.example.c001apk.logic.database.RecentAtUserDatabase
 import com.example.c001apk.logic.database.RecentEmojiDatabase
 import com.example.c001apk.logic.database.SearchHistoryDatabase
@@ -133,6 +135,21 @@ object DatabaseModule {
         return Room.databaseBuilder(
             context.applicationContext,
             BrowseHistoryDatabase::class.java, "browse_history.db"
+        ).build()
+    }
+
+    @Singleton
+    @Provides
+    fun provideOfflineCacheDao(offlineCacheDatabase: OfflineCacheDatabase): OfflineCacheDao {
+        return offlineCacheDatabase.offlineCacheDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideOfflineCacheDatabase(@ApplicationContext context: Context): OfflineCacheDatabase {
+        return Room.databaseBuilder(
+            context.applicationContext,
+            OfflineCacheDatabase::class.java, "offline_cache.db"
         ).build()
     }
 

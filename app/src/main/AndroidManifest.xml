@@ -420,6 +420,9 @@
             android:name=".ui.history.HistoryActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.offline.OfflineCacheActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.event.EventDetailActivity"
             android:exported="false" />
         <activity
@@ -474,6 +477,9 @@
             android:theme="@style/Theme.User" />
         <activity
             android:name=".ui.others.CopyActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.others.SzlmIdWebActivity"
             android:exported="false" />
         <activity
             android:name=".ui.others.WebViewActivity"

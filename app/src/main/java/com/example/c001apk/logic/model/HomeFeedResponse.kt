@@ -1,12 +1,15 @@
 package com.example.c001apk.logic.model
 
 import android.os.Parcelable
+import com.google.gson.Gson
 import com.google.gson.JsonDeserializationContext
 import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.google.gson.annotations.JsonAdapter
 import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
+import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 import java.lang.reflect.Type
 
@@ -15,6 +18,8 @@ data class HomeFeedResponse(
     val error: Int?,
     val message: String?,
     val messageStatus: Int?,
+    // 解析时顺带把每条卡片的原始 JSON 存进 Data.raw，见 DataListAdapter
+    @field:JsonAdapter(DataListAdapter::class)
     val data: List<Data>?
 ) {
 
@@ -49,6 +54,12 @@ data class HomeFeedResponse(
         @SerializedName("ip_location") val ipLocation: String?,
         val isFeedAuthor: Int?,
         val topReplyRows: List<TotalReplyResponse.Data>?,
+        // 卡片自带的附加数据（JSON 字符串）。服务端下发的是字符串，但为防某个接口下发对象/
+        // 数组把整条响应解析炸掉（产品页 product_rating_specs 踩过同类坑），用宽松适配器兜住。
+        //   subTabFeedCard1 -> {"avgData":"6.9","countData":"303.0"}
+        //   subTabFeedCard2 -> {"aututu_score_avg":3041833,...,"geek_bench_single_score_avg":2814}
+        @field:JsonAdapter(LenientStringAdapter::class)
+        val extraData: String? = null,
         val extraDataArr: ExtraDataArr?,
         val intro: String?,
         @SerializedName("tag_pics") val tagPics: List<String>?,
@@ -81,6 +92,8 @@ data class HomeFeedResponse(
         val entityType: String,
         val feedType: String?,
         val entityTemplate: String?,
+        // 解析时顺带把每个实体的原始 JSON 存进 Entities.raw，见 EntitiesListAdapter
+        @field:JsonAdapter(EntitiesListAdapter::class)
         var entities: MutableList<Entities>?,
         val id: String?,
         val fid: String?,
@@ -189,7 +202,30 @@ data class HomeFeedResponse(
         val versionDate: String? = null,
         val downloadFrom: String? = null,
         val packageName: String? = null,
-    ) : Parcelable
+    ) : Parcelable {
+
+        /**
+         * 是否已收藏。详情接口把收藏状态放在 `userAction` 的 `collect` / `favorite` 上
+         * （实测收藏/取消后两个键同步变化，列表项不下发），所以两个键要一起看，只看一个会漏。
+         */
+        val isFavorited: Boolean
+            get() = userAction?.collect == 1 || userAction?.favorite == 1
+
+        /**
+         * 本条卡片的原始 JSON。
+         *
+         * 卡片侧的字段名千变万化（`sub_title` / `goods_pic` / `item_subtitle` …），
+         * 靠 data class 逐个声明永远追不上，每来一种新卡片就得加字段发版。
+         * 留一份原文，通用渲染器就能按规则表里配的**任意字段名**取值（见
+         * [com.example.c001apk.adapter.GenericCardRenderer] 的 pickCard），
+         * 这样「适配新卡片」就退化成改云端规则表，不用再发 APK。
+         *
+         * [IgnoredOnParcel]：不进 Parcelable。跨进程传参会丢，但列表页拿到的是
+         * 同一次网络响应里解析出来的对象，不受影响。
+         */
+        @IgnoredOnParcel
+        var raw: JsonObject? = null
+    }
 
     /** 话题页头部「最近关注的人」（只要 uid + 头像） */
     @Parcelize
@@ -330,9 +366,10 @@ data class HomeFeedResponse(
     @Parcelize
     data class UserAction(
         var like: Int?,
-        val favorite: Int?,
+        // 收藏状态：详情接口下发；收藏夹弹窗操作后按 addItem 回的结果写回，所以是可变的
+        var favorite: Int?,
         var follow: Int?,
-        val collect: Int?,
+        var collect: Int?,
         var followAuthor: Int?,
         val authorFollowYou: Int?
     ) : Parcelable
@@ -377,6 +414,12 @@ data class HomeFeedResponse(
         @field:JsonAdapter(ProductRatingSpecsAdapter::class)
         val productRatingSpecs: Map<String, String>? = null,
         val description: String? = null,
+        // 实体副标题：topContent 的 headline 实体下发「来点评」这类引导词；应用类实体的
+        // subTitle 是包名/版本那类一行说明。两个字段都会出现在通用卡片里，都补上
+        @SerializedName("entityTypeName") val entityTypeName: String? = null,
+        val subTitle: String? = null,
+        // iconListCard 里的实体给的是 icon 而不是 logo
+        val icon: String? = null,
         // ---- 游戏频道（/v6/page/dataList?url=V15_YOUXI）下发的 topic 实体字段 ----
         // 讨论热度文本（热门新游卡片右下角那个数字）
         @SerializedName("hot_num_txt") val hotNumTxt: String? = null,
@@ -390,7 +433,12 @@ data class HomeFeedResponse(
         val ttitle: String? = null,
         // 点评对应的游戏图标
         val tpic: String? = null
-    ) : Parcelable
+    ) : Parcelable {
+
+        /** 原始 JSON 字段，作用同 [Data.raw]：规则表能按任意服务端字段名取值 */
+        @IgnoredOnParcel
+        var raw: JsonObject? = null
+    }
 
 }
 
@@ -416,5 +464,91 @@ class ProductRatingSpecsAdapter : JsonDeserializer<Map<String, String>?> {
         } else {
             null
         }
+}
+
+/**
+ * `extraData` 这类「内容其实是 JSON 字符串」的字段的容错解析。
+ *
+ * 服务端一般把它下发成字符串（客户端再解一次），但类型并不统一：同一个 key 在有的接口里
+ * 是对象、有的是数组。直接声明成 String 时，遇到对象就抛
+ * `Expected STRING but was BEGIN_OBJECT`，整条响应解析失败、整页空白
+ * （跟 [ProductRatingSpecsAdapter] 是同一类坑，卡片统计那两张就这么来的）。
+ *
+ * 这里只保证「解析不炸」：是字符串原样拿、是对象/数组转成原文，内容怎么用交给调用方
+ * （[com.example.c001apk.util.CardUi.stats] 会再解一次 JSON）。
+ */
+class LenientStringAdapter : JsonDeserializer<String?> {
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): String? = when {
+        json.isJsonNull -> null
+        json.isJsonPrimitive -> json.asString
+        else -> json.toString()
+    }
+}
+
+/**
+ * 解析首页/分类页的卡片列表时，顺带把每条卡片的原始 JSON 存进 `Data.raw`。
+ *
+ * 用**字段级** `@field:JsonAdapter` 而不是类级注解：类级注解会被所有 Gson 实例识别，
+ * adapter 内部再拿 Gson 解析同一个类就会无限递归；字段级只作用于 `data` 这个字段，
+ * 内部用默认 [Gson] 解析 `List<Data>` 时不经过它，天然不递归。
+ *
+ * 顺带把 `Data.entities` 上的 [EntitiesListAdapter] 也带上了（同一个默认 Gson 会读字段注解）。
+ */
+class DataListAdapter : JsonDeserializer<List<HomeFeedResponse.Data>?> {
+
+    /** 不带本次注册的 Gson；实例线程安全，共用一个 */
+    private val plain = Gson()
+
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): List<HomeFeedResponse.Data>? {
+        if (!json.isJsonArray) return null
+        val list = plain.fromJson<List<HomeFeedResponse.Data>>(
+            json,
+            object : TypeToken<List<HomeFeedResponse.Data>>() {}.type
+        ) ?: return null
+        val arr = json.asJsonArray
+        arr.forEachIndexed { i, el ->
+            // 服务端偶尔会往数组里塞 null，取不到就跳过，别让一条脏数据毁掉整页
+            val item = list.getOrNull(i) ?: return@forEachIndexed
+            if (el.isJsonObject) item.raw = el.asJsonObject
+        }
+        return list
+    }
+}
+
+/**
+ * 解析卡片的 `entities` 时，把每个实体的原始 JSON 存进 `Entities.raw`。
+ *
+ * 实体侧字段名变数最大（热搜的 `sub_title`、京东商品的 `goods_pic` /
+ * `goods_promo_price` …），规则表配上字段名就能取到，不用再加字段发版。
+ */
+class EntitiesListAdapter : JsonDeserializer<MutableList<HomeFeedResponse.Entities>?> {
+
+    private val plain = Gson()
+
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): MutableList<HomeFeedResponse.Entities>? {
+        if (!json.isJsonArray) return null
+        val list = plain.fromJson<MutableList<HomeFeedResponse.Entities>>(
+            json,
+            object : TypeToken<MutableList<HomeFeedResponse.Entities>>() {}.type
+        ) ?: return null
+        val arr = json.asJsonArray
+        arr.forEachIndexed { i, el ->
+            val item = list.getOrNull(i) ?: return@forEachIndexed
+            if (el.isJsonObject) item.raw = el.asJsonObject
+        }
+        return list
+    }
 }
 

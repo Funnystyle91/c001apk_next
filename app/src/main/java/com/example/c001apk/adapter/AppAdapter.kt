@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.widget.PopupMenu
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.view.doOnNextLayout
 import androidx.core.view.isVisible
 import androidx.databinding.ViewDataBinding
 import androidx.recyclerview.widget.GridLayoutManager
@@ -18,9 +19,11 @@ import com.example.c001apk.databinding.ItemAppVersionBinding
 import com.example.c001apk.databinding.ItemCollectionListItemBinding
 import com.example.c001apk.databinding.ItemFeedReplyBinding
 import com.example.c001apk.databinding.ItemHomeFeedBinding
+import com.example.c001apk.databinding.ItemHomeFeedCoverBinding
 import com.example.c001apk.databinding.ItemHomeFeedRefreshCardBinding
 import com.example.c001apk.databinding.ItemHomeGameCardListBinding
 import com.example.c001apk.databinding.ItemHomeGameTabCardBinding
+import com.example.c001apk.databinding.ItemHomeGenericCardBinding
 import com.example.c001apk.databinding.ItemHomeHiddenBinding
 import com.example.c001apk.databinding.ItemHomeIconLinkGridCardBinding
 import com.example.c001apk.databinding.ItemHomeIconMiniScrollCardBinding
@@ -51,6 +54,35 @@ import com.google.android.material.color.MaterialColors
 class AppAdapter(
     private val listener: ItemListener
 ) : BaseAdapter<ViewDataBinding>() {
+
+    /**
+     * 用户内容列表里的 feedCover 也按完整动态卡排。
+     *
+     * 个人主页「动态」「图文」tab、我的动态 / 我的赞 / 我的回复 / 我的常去这些列表会把
+     * 文章（entityTemplate=feedCover）和普通动态混在同一个列表里下发（htmlFeedList 实测
+     * 17 条里 6 条 feedCover、11 条 feed），照模板分派会在一页里混出「紧凑封面卡 /
+     * 完整动态卡」两种排法，而要求是整页长一样。
+     * 由 BaseAppFragment 按 ViewModel 的 feedCoverAsFeed 置位，默认 false ——
+     * 首页 / 教程页 / 产品页晒单 / 数码首页那些发现流仍走紧凑卡（viewType 27）。
+     */
+    var feedCoverAsFeed: Boolean = false
+
+    // 封面式动态（entityTemplate=feedCover）：官方是「标题 + 摘要 + 右侧 106dp 封面图」的紧凑卡，
+    // 没有头像 / 用户名区，跟完整动态卡不是一个排法，所以单独一张布局
+    class FeedCoverViewHolder(
+        val binding: ItemHomeFeedCoverBinding,
+        val listener: ItemListener
+    ) :
+        BaseViewHolder<ViewDataBinding>(binding) {
+        override fun bind(data: HomeFeedResponse.Data) {
+            binding.setVariable(BR.data, data)
+            binding.setVariable(BR.listener, listener)
+            binding.setVariable(BR.likeData, Like(data.likenum ?: "0", data.userAction?.like ?: 0))
+            // 封面图：pic 优先，没有就用九图第一张（官方那个槽位也是这么落图的）
+            val cover = data.pic?.takeIf { it.isNotEmpty() } ?: data.picArr?.firstOrNull()
+            ImageUtil.showIMG(binding.coverImage, cover)
+        }
+    }
 
     class FeedViewHolder(val binding: ItemHomeFeedBinding, val listener: ItemListener) :
         BaseViewHolder<ViewDataBinding>(binding) {
@@ -92,6 +124,10 @@ class AppAdapter(
                     show()
                 }
             }
+            // 附加信息槽的链接（二手走闲鱼 / 商品清单）统一交给 ItemListener 的通用跳转
+            binding.extraPart.onOpen = { url, title ->
+                listener.onOpenLink(binding.root, url, title)
+            }
         }
 
         override fun bind(data: HomeFeedResponse.Data) {
@@ -117,6 +153,56 @@ class AppAdapter(
             // 设备串要停在「置顶 / 仅自己可见」两个小标记左侧（两个都隐藏时自动延伸到最右）
             lp.endToEnd = binding.topBadge.id
             binding.device.layoutParams = lp
+
+            bindMessageMore(data)
+            // 视频槽：非视频动态（以及视频动态拿不到可播地址）内部会自己整块隐藏
+            binding.videoPart.bind(data)
+            // 附加信息槽：二手 / 商品清单的跳转交给 ItemListener（自己只认链接，不认页面）
+            binding.extraPart.bind(data)
+        }
+
+        /**
+         * 正文被折叠成 [MESSAGE_COLLAPSED_LINES] 行时才露出「查看更多」（点了进详情页看全文）。
+         *
+         * 只能按排版结果判：同样的字数，窄屏 / 长链接都会让行数不同。而此刻
+         * `binding.message` 的 layout 还是上一条数据的，所以判定挂到 `doOnNextLayout` 上，
+         * 等这条绑定的文本排完版再算。回调有可能在 ViewHolder 被回收复用之后才跑到，
+         * 所以先用 id 对一下当前绑的还是不是同一条数据，别把别人的按钮点亮。
+         */
+        private fun bindMessageMore(data: HomeFeedResponse.Data) {
+            binding.messageMore.isVisible = false
+            if (data.message.isNullOrEmpty()) return
+
+            binding.messageMore.setOnClickListener { view ->
+                // userInfo 在模型里是可空的（databinding 表达式里直接取字段不会报，
+                // Kotlin 侧必须自己兜住）
+                val userInfo = data.userInfo
+                listener.onViewFeed(
+                    view, data.id, userInfo?.uid, userInfo?.username,
+                    userInfo?.userAvatar, data.deviceTitle, data.message,
+                    data.dateline?.toString(), null, null, data
+                )
+            }
+
+            val bindId = id
+            val lines = collapsedLines
+            binding.message.doOnNextLayout {
+                if (id != bindId) return@doOnNextLayout
+                val layout = binding.message.layout ?: return@doOnNextLayout
+                val lastLine = layout.lineCount - 1
+                val truncated = layout.lineCount > lines ||
+                        (lastLine >= 0 && layout.getEllipsisCount(lastLine) > 0)
+                binding.messageMore.isVisible = truncated
+            }
+        }
+
+        /** 正文折叠行数，与 item_home_feed.xml 里 message 的 maxLines 保持一致 */
+        private val collapsedLines: Int
+            get() = MESSAGE_COLLAPSED_LINES
+
+        companion object {
+            /** 正文折叠行数，与 item_home_feed.xml 里 message 的 maxLines 保持一致 */
+            private const val MESSAGE_COLLAPSED_LINES = 5
         }
     }
 
@@ -486,7 +572,6 @@ class AppAdapter(
         }
     }
 
-    // 未支持的卡片模板：显示一行提示，而不是抛异常让整页空白/崩溃
     // configCard（页面配置）/ sponsorCard（广告位）这类不该出现在列表里的卡片，占 0 高度
     class HiddenViewHolder(val binding: ItemHomeHiddenBinding) :
         BaseViewHolder<ViewDataBinding>(binding) {
@@ -494,16 +579,55 @@ class AppAdapter(
         }
     }
 
+    /**
+     * 最后的网兜：只有 onCreateViewHolder 收到某个没有对应分支的 viewType 时才会走到。
+     * getItemViewType 已经把全部卡片模板和未知顶层实体都分流给了通用卡片
+     * （[GenericCardViewHolder]，见 [GenericCardRenderer]），正常渲染路径不会再产出 14 这个
+     * viewType；留着它是为了万一漏了分支也不至于整页空白/崩溃。
+     *
+     * 真走到这里时把各类型都有的通用字段排成一张卡片（正文 message → description，
+     * 标题 title），能点就点。不标类型、不显示模板名。
+     */
     class UnsupportedViewHolder(
         val binding: ItemHomeUnsupportedBinding,
         val listener: ItemListener
     ) :
         BaseViewHolder<ViewDataBinding>(binding) {
         override fun bind(data: HomeFeedResponse.Data) {
-            binding.tip.text = binding.root.context.getString(
-                R.string.unsupported_card,
-                data.entityTemplate ?: data.entityType.orEmpty()
-            )
+            binding.title.isVisible = !data.title.isNullOrEmpty()
+            binding.title.text = data.title
+
+            val summary = data.message?.takeIf { it.isNotBlank() } ?: data.description
+            binding.summary.isVisible = !summary.isNullOrEmpty()
+            binding.summary.text = summary
+
+            // 有 url 才可点（点了走既有的链接分发，能进详情/H5 的都会进）；
+            // 没有 url 的（纯展示卡片）别给出会亮却没反应的按压反馈
+            val url = data.url
+            val clickable = !url.isNullOrEmpty()
+            binding.root.isClickable = clickable
+            binding.root.isFocusable = clickable
+            if (clickable) {
+                binding.root.setOnClickListener { view -> listener.onOpenLink(view, url, data.title) }
+            } else {
+                binding.root.setOnClickListener(null)
+            }
+        }
+    }
+
+    /**
+     * 通用卡片：服务端下发的卡片模板太多（`_rev/card_tpl_scan.py` 实测 39 种，且随时会冒新的），
+     * 一个个写 ViewHolder 写不完。这里整个交给 [GenericCardRenderer]：卡片自身的标题 / 说明 /
+     * 配图照排，`entities` 按「模板名 + 实体数量」排成横滚 / 宫格 / 纵向列表，每条实体再按自己的
+     * 内容（有 logo 当图标、只有 pic 当大图、都没有当纯文字）选样式。
+     * 认不出的模板从此也能把内容显示出来，而不是只剩一张占位卡。
+     */
+    class GenericCardViewHolder(
+        val binding: ItemHomeGenericCardBinding,
+        val listener: ItemListener
+    ) : BaseViewHolder<ViewDataBinding>(binding) {
+        override fun bind(data: HomeFeedResponse.Data) {
+            GenericCardRenderer.render(binding, data, listener)
         }
     }
 
@@ -951,6 +1075,24 @@ class AppAdapter(
                 )
             }
 
+            26 -> {
+                GenericCardViewHolder(
+                    ItemHomeGenericCardBinding.inflate(
+                        LayoutInflater.from(parent.context), parent,
+                        false
+                    ), listener
+                )
+            }
+
+            27 -> {
+                FeedCoverViewHolder(
+                    ItemHomeFeedCoverBinding.inflate(
+                        LayoutInflater.from(parent.context), parent,
+                        false
+                    ), listener
+                )
+            }
+
             else -> {
                 UnsupportedViewHolder(
                     ItemHomeUnsupportedBinding.inflate(
@@ -973,6 +1115,17 @@ class AppAdapter(
             if (payloads[0] == true) {
                 when (holder) {
                     is FeedViewHolder -> {
+                        holder.binding.setVariable(
+                            BR.likeData,
+                            Like(
+                                currentList[position].likenum ?: "0",
+                                currentList[position].userAction?.like ?: 0
+                            )
+                        )
+                        holder.binding.executePendingBindings()
+                    }
+
+                    is FeedCoverViewHolder -> {
                         holder.binding.setVariable(
                             BR.likeData,
                             Like(
@@ -1043,10 +1196,11 @@ class AppAdapter(
                     "productConfigList" -> 15
 
                     // 产品页「参数」tab：同价位 / 同SoC / 同系列（实体是 product 才走原生模板）
+                    // 实体不是 product 的 listCard（话题、商品混排）交给通用卡片排
                     "listCard" ->
                         if (currentList[position].entities?.firstOrNull()?.entityType == "product")
                             16
-                        else 14
+                        else 26
 
                     // 活动/众测图文卡片
                     "imageTextGridCard" -> 17
@@ -1067,13 +1221,18 @@ class AppAdapter(
                     // 页面配置（configCard）/ 广告位（sponsorCard）：不渲染
                     "configCard", "sponsorCard" -> 25
 
-                    // 未支持的卡片模板交给占位 ViewHolder，避免整页空白/崩溃
-                    else -> 14
+                    // 其余卡片模板全部交给通用卡片：标题 / 说明 / 配图照排，entities 按
+                    // 「模板名 + 数量」排成横滚 / 宫格 / 纵向列表。实测 39 种顶层模板里还有 20 多种
+                    // 没单独实现，这里一次全接住，服务端以后再加新模板也不用改代码
+                    else -> 26
                 }
             }
 
-            "feed" -> when (currentList[position].feedType) {
-                "vote" -> 2//9
+            // 封面式动态（feedCover）：教程页 / 产品页晒单 / 数码首页下发的是「标题 + 摘要 +
+            // 右侧 106dp 封面图」的紧凑卡，跟完整动态卡排法不一样，单独一个 viewType。
+            // 用户内容列表例外（feedCoverAsFeed，见字段注释）：那一类页面整页要和普通动态长一样
+            "feed" -> when {
+                !feedCoverAsFeed && currentList[position].entityTemplate == "feedCover" -> 27
                 else -> 2
             }
 
@@ -1101,8 +1260,10 @@ class AppAdapter(
             // 用户主页「点评」tab 的评分实体
             "nodeRating" -> 21
 
-            // 未支持的实体类型同样兜底到占位，避免整页空白/崩溃
-            else -> 14
+            // 其余顶层实体（服务端随时会冒新 entityType）也交给通用卡片：它按 Data 自己的
+            // 标题 / 说明 / 配图 / entities 渲染，认得出内容就正常显示，一个字段都没有时
+            // 才退回那行「暂不支持的内容卡片：xxx」
+            else -> 26
         }
     }
 

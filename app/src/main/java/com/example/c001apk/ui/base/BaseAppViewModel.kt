@@ -38,6 +38,15 @@ abstract class BaseAppViewModel(
     protected open val appIdForDownload: String? get() = null
     protected open val packageNameForDownload: String? get() = null
 
+    /**
+     * 列表里下发的 feedCover 是否也按完整动态卡渲染，默认 false。
+     * 用户内容列表（个人主页「动态」「图文」tab、我的动态 / 我的赞 / 我的回复 / 我的常去）会把
+     * 文章和普通动态混在同一个列表里下发，要求整页长一样；发现流（首页 / 教程页 / 数码首页 /
+     * 产品页晒单）保持紧凑封面卡。
+     * 由 [BaseAppFragment] 转交给 AppAdapter.feedCoverAsFeed。
+     */
+    open val feedCoverAsFeed: Boolean get() = false
+
     val apkDownload = MutableLiveData<Event<ApkDownloadInfo>>()
 
     val footerState = MutableLiveData<FooterState>()
