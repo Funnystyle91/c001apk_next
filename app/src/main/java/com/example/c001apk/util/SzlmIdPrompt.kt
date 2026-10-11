@@ -65,7 +65,7 @@ object SzlmIdPrompt {
                     // 调试用：换一份随机 szlmId（不置 szlmIdConfigured，仍算未配置）
                     PrefManager.SZLMID = TokenDeviceUtils.randHexString(16)
                     PrefManager.szlmIdNoticed = true
-                    TokenDeviceUtils.applyDefaultFingerprint()
+                    rebuildDeviceString()
                 }
             }
         }.create().apply {
@@ -92,6 +92,20 @@ object SzlmIdPrompt {
         // 填过（非空）才算「已配置」；清空则回到未配置状态
         PrefManager.szlmIdConfigured = id.isNotEmpty()
         PrefManager.szlmIdNoticed = true
-        TokenDeviceUtils.applyDefaultFingerprint()
+        rebuildDeviceString()
+    }
+
+    /**
+     * szlmId 与机型是两件独立的事：这里只重建设备串本身，既不写机型字段，
+     * 也不碰 [PrefManager.customFingerprint] —— 换 ID 不该把用户设过的机型冲掉。
+     *
+     * 自定义过机型时必须就地重造，否则 [TokenDeviceUtils.getLastingDeviceCode]
+     * 会直接返回旧串，首字段还停在旧 szlmId；其余情况留给它在下次请求时按
+     * 「上报真实机型」开关重建（两条分支都用新 szlmId 算值，必然与旧串不同）。
+     */
+    private fun rebuildDeviceString() {
+        if (PrefManager.customFingerprint) {
+            PrefManager.xAppDevice = TokenDeviceUtils.getDeviceCode(false)
+        }
     }
 }
