@@ -5,6 +5,7 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.load.model.LazyHeaders
 import com.bumptech.glide.request.target.Target
 import com.bumptech.glide.request.transition.Transition
 import net.mikaelzero.mojito.loader.ImageLoader
@@ -79,16 +80,29 @@ open class GlideImageLoader private constructor(val context: Context, okHttpClie
         // 也不带任何请求头），图片 CDN 的 WAF 会因此回 567，点开大图就黑屏。
         // 换成 GlideUrl 才能落到 OkHttp 上，从而带上 UA 和下载进度回调；
         // 本地 file:// 仍按 Uri 处理（GlideUrl 只认 http(s)）。
-        val model: Any =
-            if (uri.scheme == "http" || uri.scheme == "https") GlideUrl(uri.toString()) else uri
+        // wrapWithHeaders 在做同一件事的同时，额外把 UA 防盗链需要的请求头带上。
         requestManager
             .downloadOnly()
-            .load(model)
+            .load(wrapWithHeaders(uri))
             .onlyRetrieveFromCache(onlyRetrieveFromCache)
             .into(target)
     }
 
+    // image.coolapk.com 在腾讯云 EdgeOne 上开了 UA 防盗链（非 CoolMarket UA 一律回 567 拦截页），
+    // 裸 Uri 请求没有这个头，全屏看图会下载失败（黑屏）；带上后缓存 key 也和 showIMG 一致，能直接复用缩略图缓存
+    private fun wrapWithHeaders(uri: Uri): Any {
+        if (uri.scheme != "http" && uri.scheme != "https") return uri
+        val headers = headerProvider?.invoke() ?: return uri
+        val builder = LazyHeaders.Builder()
+        headers.forEach { (name, value) -> builder.addHeader(name, value) }
+        return GlideUrl(uri.toString(), builder.build())
+    }
+
     companion object {
+        // 请求头在每次下载时求值：设备参数（MODEL/BRAND 等）由 PrefManager 运行期写入，
+        // 早绑定会把 UA 冻结在 Application 启动时的空值上
+        var headerProvider: (() -> Map<String, String>)? = null
+
         @JvmOverloads
         fun with(context: Context, okHttpClient: OkHttpClient? = null): GlideImageLoader {
             return GlideImageLoader(context, okHttpClient)

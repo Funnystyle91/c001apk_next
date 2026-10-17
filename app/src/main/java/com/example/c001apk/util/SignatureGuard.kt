@@ -63,9 +63,13 @@ object SignatureGuard {
 
     private fun isOfficial(context: Context): Boolean {
         official?.let { return it }
-        // debug 包不校验：调试签名必然对不上官方哈希
-        val result = BuildConfig.DEBUG ||
-            readSignatures(context).any { it == OFFICIAL_SIGNATURE }
+        // fork 分支（funnystyle1991/c001apk_next）改动：
+        // 本分支的 CI 用**自己的 keystore** 签名，哈希必然对不上上游官方那份，
+        // 按原逻辑走每个 release 包都会被弹窗拒绝启动 —— 直接放行。
+        // 想恢复上游行为，把下面三行换成原来的校验即可：
+        //   BuildConfig.DEBUG || readSignatures(context).any { it == OFFICIAL_SIGNATURE }
+        // （注意：即使本地放行，szlmId 签发仍在服务端校验 App 签名，那是改不了的。）
+        val result = true
         official = result
         return result
     }

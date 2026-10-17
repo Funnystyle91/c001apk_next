@@ -83,6 +83,14 @@ val verCode = (findProperty("overrideVersionCode") as String?)?.takeIf { it.isNo
 val verTag = (findProperty("overrideVersionName") as String?)?.takeIf { it.isNotBlank() }?.trim() ?: fileTag
 // 发行渠道：CI 按分支传 -Pchannel=release|debug；本地不传默认 release
 val channel = (findProperty("channel") as String?)?.takeIf { it.isNotBlank() } ?: "release"
+// 测试渠道把 commit 短哈希拼进 versionName：每轮包文件名都不同，
+// 真机不会装到下载缓存里的旧包，设置页也能一眼对上代码版本
+val gitSha = try {
+    providers.exec { commandLine("git", "rev-parse", "--short=7", "HEAD") }
+        .standardOutput.asText.get().trim()
+} catch (t: Exception) {
+    ""
+}
 // versionName 统一前缀（与仓库同名）：c001apk_next-V1.0.1-release
 val apkPrefix = "c001apk_next"
 // 打包时刻，关于页显示用。固定按北京时间打：CI 跑在 UTC，不锁时区的话
@@ -138,10 +146,16 @@ android {
             // debug 频道的包 CI 是用 release 变体打的（BuildConfig.DEBUG=false），
             // 但排障需要看云端报文，所以这里单独开一个开关
             buildConfigField("boolean", "HTTP_LOG", (channel == "debug" || name == "debug").toString())
+            // 测试渠道标记 + commit 哈希：调试包实为 release 变体（DEBUG=false），
+            // 启动 toast 和设置页靠这两个字段认包，避免拿缓存旧包判新代码
+            buildConfigField("boolean", "DEV_CHANNEL", (channel == "debug").toString())
+            buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         }
         release {
-            // 拼出完整版本名：c001apk_next-V1.0.2-release
-            versionNameSuffix = "-$channel"
+            // 拼出完整版本名：c001apk_next-V1.0.1-release（beta 分支为 -beta）；
+            // 测试渠道带上 commit 哈希，每轮包文件名都不同，下载缓存不会冒充新包
+            versionNameSuffix =
+                if (channel == "debug" && gitSha.isNotBlank()) "-$channel-g$gitSha" else "-$channel"
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -194,7 +208,6 @@ configurations.configureEach {
 dependencies {
     androidTestImplementation(libs.androidx.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    debugImplementation(libs.leakcanary.android)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.fragment.ktx)
@@ -222,6 +235,9 @@ dependencies {
     ksp(libs.glide.ksp)
     implementation(libs.glide.okhttp3.integration)
     implementation(libs.glide.transformations)
+    // 荣耀随心握官方 SDK：底栏跟随握持手。非荣耀机型上它初始化会失败，
+    // 调用处一律 catch Throwable 后让底栏保持居中
+    implementation("com.hihonor.mcs:smartgripkit:1.0.0.300")
     implementation(project(":mojito"))
     implementation(project(":SketchImageViewLoader"))
     implementation(project(":GlideImageLoader"))
